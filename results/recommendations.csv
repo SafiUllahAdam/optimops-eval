@@ -1,0 +1,5 @@
+,vehicles,replays,P90 SAP (min),unanswered fires,predicted from the curves,where
+A,2,20,25.63 ± 0.09,59 ± 4,"25.59 min, 57 fires",FPT: CIS14 x2
+B,4,20,25.61 ± 0.10,19 ± 3,"25.59 min, 19 fires","FPT: CIS14 x2, CIS18, CIS22"
+C,8,20,23.17 ± 0.07,19 ± 2,"23.24 min, 19 fires","FPT: CIS14 x2, CIS18, CIS22; VSAV: CIS08, CIS10, CIS22, CIS23"
+D,12,20,21.96 ± 0.09,19 ± 2,"21.94 min, 19 fires","FPT: CIS14 x2, CIS18, CIS22; VSAV: CIS05, CIS08, CIS09, CIS10, CIS17, CIS19, CIS22, CIS23"

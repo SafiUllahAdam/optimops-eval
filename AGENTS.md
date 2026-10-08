@@ -24,7 +24,7 @@ everywhere: why a choice was made, what was assumed, how reliable the result is,
 | `docs/` | Copies of the brief and the business guide | Reference only |
 | `raw_data/` | Byte-identical copy of `donnees/` | Read only, never modified |
 | `data/` | Cleaned or derived tables | Rebuilt by the notebooks |
-| `analysis/` | `helpers.py` (data, indicators), `figures.py` (charts), one notebook per task | All code lives here |
+| `analysis/` | `helpers.py` (data, indicators), `simulation.py` (cached simulator calls, Pareto), `figures.py` (charts), one notebook per task | All code lives here |
 | `results/` | Figures (PNG) and result tables (CSV) | Written by code only |
 | `reports/` | Final report (3 pages max) | Written last |
 
@@ -46,6 +46,9 @@ small function, no single giant file. Notebooks: `task1_baseline.ipynb`, then `t
 - Budget: **2000 replays for the whole test**, counted across kernel restarts. `n_replicats=5` costs 5.
 - Plan the experiment before spending: estimate noise first, then screen, then confirm the best candidates.
 - Never delete or edit `.budget.json` or `journal_simulateur.csv`. The journal is a deliverable, sent as is.
+- Call the simulator only through `simulation.evaluate()`. It caches every answer in `results/simulation_runs.csv`,
+  so notebooks re-run for free. Never delete that file: re-running would spend the budget again.
+- Keep 600 replays for Act 3 (`reserve=` argument). After Task 2: 950 used, 1050 left.
 - Do not modify the simulator. Results are noisy: report means with their spread, never a single replay.
 
 ## Working rules
@@ -54,7 +57,9 @@ small function, no single giant file. Notebooks: `task1_baseline.ipynb`, then `t
 - Keep notebooks short: a little code, the key table or figure, then two or three plain sentences.
 - Writing style: plain and human, short sentences, no em dashes, no filler. Figures must read well for a fire
   officer, not only for a data scientist.
-- Run notebooks top to bottom in the `optimops` conda environment before committing.
+- Run notebooks top to bottom in the `optimops` conda environment before committing. From the command line use
+  `jupyter nbconvert --execute --ExecutePreprocessor.kernel_name=optimops`: the default `python3` kernel is base
+  Python, which cannot load the simulator's `.pyc` files (bad magic number).
 - Commits: plain messages, no AI co-author lines. This repository is public: do not commit `docuu/`, `docs/`,
   `raw_data/` or `data/` (exam material, private emails).
 

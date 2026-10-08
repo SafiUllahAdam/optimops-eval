@@ -3,6 +3,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.lines import Line2D
 
 from helpers import RESULTS
@@ -152,3 +153,101 @@ def monthly_unfulfilled(interventions: pd.DataFrame) -> pd.DataFrame:
     fig.savefig(RESULTS / "monthly_unfulfilled.png")
     monthly.index = MONTHS
     return monthly.T
+
+
+# -- Task 2 ---------------------------------------------------------------------------------------
+
+
+VEHICLES_RAMP = LinearSegmentedColormap.from_list("vehicles", ["#cde2fb", "#86b6ef", "#2a78d6", "#184f95", "#0d366b"])
+
+
+def reinforcement_curves(curve_v: pd.DataFrame, curve_f: pd.DataFrame) -> None:
+    """What each extra vehicle buys: P90 against VSAVs added, unanswered fires against FPTs added."""
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.6))
+    panels = [
+        (axes[0], curve_v, BLUE, "VSAV", "P90 of SAP response times (min)",
+         "VSAV: about half a minute off the P90 each, up to the 8th"),
+        (axes[1], curve_f, ORANGE, "FPT", "Unanswered fires per year",
+         "FPT: the first four remove 94% of unanswered fires"),
+    ]
+    for ax, curve, color, vehicle, ylabel, title in panels:
+        ax.errorbar(curve.index, curve["mean"], yerr=curve["hw"], color=color, lw=2, marker="o", ms=5,
+                    capsize=3, elinewidth=1.2)
+        ax.set_xticks(curve.index, [f"{k}\n{c}" if k else "0\nnone" for k, c in zip(curve.index, curve["centre"])],
+                      fontsize=7.5)
+        ax.set_xlabel(f"{vehicle}s added, and the centre that received the last one")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title, fontsize=10)
+    axes[1].set_ylim(bottom=0)
+    fig.text(0.01, 0.01, "Simulator, mean of 10 fresh replays per point (baseline: 50). Bars: 95% interval.",
+             fontsize=8, color=MUTED)
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.savefig(RESULTS / "reinforcement_curves.png")
+
+
+def tradeoff_front(front: pd.DataFrame, picks: pd.DataFrame) -> None:
+    """The menu: every split of up to 12 vehicles, P90 against unanswered fires, coloured by vehicles bought."""
+    fig, ax = plt.subplots(figsize=(8.6, 6.2))
+    dominated = front[~front["pareto"]]
+    ax.scatter(dominated["p90"], dominated["inc"], s=22, color=NO_TARGET, zorder=2, label="Dominated (wasteful)")
+    for total in (3, 6, 9, 12):
+        line = front[front["pareto"] & (front["vehicles"] == total)].sort_values("VSAV")
+        ax.plot(line["p90"], line["inc"], color=VEHICLES_RAMP(total / 12), lw=1.2, zorder=2,
+                label=f"All splits of {total} vehicles")
+    pts = front[front["pareto"]]
+    sc = ax.scatter(pts["p90"], pts["inc"], c=pts["vehicles"], cmap=VEHICLES_RAMP, vmin=0, vmax=12, s=34,
+                    edgecolor=SURFACE, linewidth=0.8, zorder=3)
+    for _, p in picks.iterrows():
+        ax.scatter(p["p90"], p["inc"], s=190, facecolor="none", edgecolor=INK, linewidth=1.6, zorder=4)
+        ax.annotate(p["label"], (p["p90"], p["inc"]), xytext=(9, 4), textcoords="offset points", fontsize=9,
+                    color=INK, fontweight="bold", zorder=5)
+    cb = fig.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
+    cb.set_label("Extra vehicles bought", color=INK)
+    cb.outline.set_visible(False)
+    ax.set_xlabel("P90 of SAP response times (min)")
+    ax.set_yscale("symlog", linthresh=10, linscale=0.6)
+    ticks = [0, 5, 10, 20, 50, 100, 200, 300]
+    ax.set_yticks(ticks, [str(t) for t in ticks])
+    ax.set_ylim(-0.5, 330)
+    ax.set_ylabel("Unanswered fires per year (scale stretched at the bottom)")
+    ax.set_title("The menu: along each line, the same number of vehicles split differently\n"
+                 "between VSAV (moves left) and FPT (moves down)", fontsize=10)
+    ax.legend(loc="upper left", bbox_to_anchor=(0.36, 0.92), frameon=False, fontsize=8.5)
+    fig.tight_layout()
+    fig.savefig(RESULTS / "pareto_front.png")
+
+
+def reinforcement_map(raw: dict, picks: pd.DataFrame, interventions: pd.DataFrame) -> None:
+    """Where the extra vehicles go, one small map per recommended configuration."""
+    communes, centres = raw["communes"].set_index("insee"), raw["centres"].set_index("code_cis")
+    n = interventions.groupby("insee").size().reindex(communes.index, fill_value=0)
+    fig, axes = plt.subplots(1, len(picks), figsize=(4.1 * len(picks), 4.6), sharey=True)
+    for ax, (_, p) in zip(np.atleast_1d(axes), picks.iterrows()):
+        ax.scatter(communes["x_km"], communes["y_km"], s=6 + 60 * n / n.max(), color=NO_TARGET, zorder=1)
+        ax.scatter(centres["x_km"], centres["y_km"], marker="^", s=26, color=MUTED, zorder=2)
+        for cis, per_type in p["config"].items():
+            x, y = centres.loc[cis, ["x_km", "y_km"]]
+            text = "\n".join(f"+{k} {t}" for t, k in per_type.items())
+            color = ORANGE if set(per_type) == {"FPT"} else BLUE if set(per_type) == {"VSAV"} else INK
+            ax.scatter(x, y, marker="^", s=90, color=color, edgecolor=INK, linewidth=0.8, zorder=3)
+            # a reinforced neighbour just to the east: put this label on the west side
+            crowded = any(0 < centres.loc[c, "x_km"] - x < 8 and abs(centres.loc[c, "y_km"] - y) < 4
+                          for c in p["config"] if c != cis)
+            ax.annotate(f"{cis}\n{text}", (x, y), xytext=(-5 if crowded else 5, 4), textcoords="offset points",
+                        fontsize=6.5, color=INK, ha="right" if crowded else "left", zorder=4)
+        ax.set_title(f"{p['label']}: {p['vehicles']} vehicles\nP90 {p['p90']:.1f} min, {p['inc']:.0f} fires",
+                     fontsize=9.5)
+        ax.set_aspect("equal")
+        ax.grid(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    np.atleast_1d(axes)[0].legend(handles=[
+        Line2D([], [], marker="^", ls="", color=BLUE, mec=INK, ms=8, label="Extra VSAV"),
+        Line2D([], [], marker="^", ls="", color=ORANGE, mec=INK, ms=8, label="Extra FPT"),
+        Line2D([], [], marker="^", ls="", color=INK, ms=8, label="Extra VSAV and FPT"),
+        Line2D([], [], marker="^", ls="", color=MUTED, ms=6, label="Other centres"),
+    ], loc="lower left", frameon=False, fontsize=7.5)
+    fig.suptitle("Where the extra vehicles go (grey dots: communes, sized by 2025 interventions)",
+                 x=0.01, ha="left", fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    fig.savefig(RESULTS / "reinforcement_map.png")
