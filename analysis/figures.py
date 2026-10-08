@@ -3,14 +3,15 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.lines import Line2D
 
 from helpers import RESULTS
 
 INK, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 BLUE, ORANGE, AQUA, NO_TARGET = "#2a78d6", "#eb6834", "#1baf7a", "#c9c8c3"
-RAMP = LinearSegmentedColormap.from_list("blue", ["#cde2fb", "#86b6ef", "#2a78d6", "#184f95", "#0d366b"])
+LATE_CLASSES = ["Under 10%", "10 to 25%", "25 to 50%", "Over 50%"]
+LATE_COLORS = ["#f9cfa5", "#f09a5e", "#d65a2e", "#9c2a1a"]   # light to dark: worse is darker
+TIME_BLOCKS = {"Night": "0h to 7h", "Morning": "7h to 12h", "Afternoon": "12h to 19h", "Evening": "19h to 24h"}
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 plt.rcParams.update({
@@ -30,81 +31,97 @@ def _judged(interventions: pd.DataFrame) -> pd.DataFrame:
 
 
 def map_late_share(interventions: pd.DataFrame, raw: dict) -> pd.DataFrame:
-    """Where: share of late interventions per commune, with the centres on top."""
+    """Where: each commune coloured by its share of late arrivals, with the fire stations on top."""
     communes, centres = raw["communes"], raw["centres"]
     by_commune = (
-        interventions.groupby("insee").size().rename("n").to_frame()
-        .join(_judged(interventions).groupby("insee")["late"].mean().mul(100).rename("late_pct"))
+        _judged(interventions).groupby("insee")["late"].mean().mul(100).rename("late_pct").to_frame()
+        .join(interventions.groupby("insee").size().rename("n"), how="right")
         .join(communes.set_index("insee")[["nom_commune", "x_km", "y_km", "zone_sdacr"]])
     )
-    size = 25 + 400 * by_commune["n"] / by_commune["n"].max()
-    z4 = by_commune["zone_sdacr"] == "Z4"
+    classes = pd.cut(by_commune["late_pct"], [0, 10, 25, 50, 100.01], right=False, labels=LATE_CLASSES)
 
-    fig, ax = plt.subplots(figsize=(8.6, 7.6))
-    ax.scatter(by_commune.loc[z4, "x_km"], by_commune.loc[z4, "y_km"], s=size[z4], color=NO_TARGET,
+    fig, ax = plt.subplots(figsize=(9.6, 7.4))
+    z4 = by_commune["zone_sdacr"] == "Z4"
+    ax.scatter(by_commune.loc[z4, "x_km"], by_commune.loc[z4, "y_km"], s=110, color=NO_TARGET,
                edgecolor=SURFACE, linewidth=1.5, zorder=2)
-    pts = ax.scatter(by_commune.loc[~z4, "x_km"], by_commune.loc[~z4, "y_km"], s=size[~z4],
-                     c=by_commune.loc[~z4, "late_pct"], cmap=RAMP, vmin=0, vmax=60,
-                     edgecolor=SURFACE, linewidth=1.5, zorder=3)
+    handles = []
+    for label, color in zip(LATE_CLASSES, LATE_COLORS):
+        sel = classes == label
+        ax.scatter(by_commune.loc[sel, "x_km"], by_commune.loc[sel, "y_km"], s=110, color=color,
+                   edgecolor=SURFACE, linewidth=1.5, zorder=3)
+        handles.append(Line2D([], [], marker="o", ls="", color=color, ms=10, label=f"{label}  ({sel.sum()} communes)"))
+    handles.append(Line2D([], [], marker="o", ls="", color=NO_TARGET, ms=10, label=f"Z4, no deadline set  ({z4.sum()})"))
+
     pro = centres["regime"] == "professionnel"
-    ax.scatter(centres.loc[pro, "x_km"], centres.loc[pro, "y_km"], marker="^", s=70, color=INK, zorder=4)
-    ax.scatter(centres.loc[~pro, "x_km"], centres.loc[~pro, "y_km"], marker="^", s=70, facecolor=SURFACE,
-               edgecolor=INK, linewidth=1.4, zorder=4)
-    worst = by_commune.loc[~z4].nlargest(4, "late_pct")
+    ax.scatter(centres.loc[pro, "x_km"], centres.loc[pro, "y_km"], marker="^", s=85, color=INK, zorder=4)
+    ax.scatter(centres.loc[~pro, "x_km"], centres.loc[~pro, "y_km"], marker="^", s=85, facecolor=SURFACE,
+               edgecolor=INK, linewidth=1.5, zorder=4)
+    stations = [
+        Line2D([], [], marker="^", ls="", color=INK, ms=9, label="Professional crews"),
+        Line2D([], [], marker="^", ls="", mfc=SURFACE, mec=INK, ms=9, label="Volunteer crews"),
+    ]
+
+    worst = by_commune.loc[~z4].nlargest(3, "late_pct")
     for i, (_, row) in enumerate(worst.iterrows()):
-        ax.annotate(f"{row['nom_commune']}  {row['late_pct']:.0f}% late", (row["x_km"], row["y_km"]),
-                    xytext=(8, 7 if i % 2 == 0 else -13), textcoords="offset points", fontsize=8.5,
-                    color=INK, zorder=5)
-    cb = fig.colorbar(pts, ax=ax, shrink=0.7, pad=0.02)
-    cb.set_label("% of interventions arriving late", color=INK)
-    cb.outline.set_visible(False)
-    ax.legend(handles=[
-        Line2D([], [], marker="^", ls="", color=INK, ms=8, label="Professional centre"),
-        Line2D([], [], marker="^", ls="", mfc=SURFACE, mec=INK, ms=8, label="Volunteer centre"),
-        Line2D([], [], marker="o", ls="", color=NO_TARGET, ms=9, label="Z4 commune (no target)"),
-    ], loc="lower left", frameon=False, fontsize=9)
-    ax.set_title("Where: late arrivals concentrate in outlying communes\n"
-                 "% of 2025 interventions above threshold, circle size = number of interventions", fontsize=10)
-    ax.set_xlabel("km (east)")
-    ax.set_ylabel("km (north)")
+        ax.annotate(f"{row['nom_commune']}: {row['late_pct']:.0f}% late", (row["x_km"], row["y_km"]),
+                    xytext=(9, [7, -14, -28][i]), textcoords="offset points", fontsize=9, color=INK,
+                    zorder=5)
+
+    leg = ax.legend(handles=handles, title="Interventions arriving late", loc="upper left",
+                    bbox_to_anchor=(1.01, 1), frameon=False, fontsize=9.5, title_fontsize=10, alignment="left")
+    ax.add_artist(leg)
+    ax.legend(handles=stations, title="Fire stations", loc="upper left", bbox_to_anchor=(1.01, 0.62),
+              frameon=False, fontsize=9.5, title_fontsize=10, alignment="left")
+
+    x0, y0 = by_commune["x_km"].max() - 10, by_commune["y_km"].min() - 3   # 10 km scale bar
+    ax.plot([x0, x0 + 10], [y0, y0], color=INK, lw=2)
+    ax.text(x0 + 5, y0 + 1, "10 km", ha="center", fontsize=8.5, color=INK)
     ax.set_aspect("equal")
-    ax.grid(False)
+    ax.axis("off")
+    ax.set_title("Where: late responses are concentrated on the edges of the department", loc="left", pad=22)
+    ax.text(0, 1.02, "Share of 2025 interventions arriving after the regulatory deadline, by commune",
+            transform=ax.transAxes, fontsize=9.5, color=MUTED)
     fig.tight_layout()
-    fig.savefig(RESULTS / "map_late_share.png")
+    fig.savefig(RESULTS / "map_late_share.png", bbox_inches="tight", bbox_extra_artists=[leg])
     return worst[["nom_commune", "zone_sdacr", "n", "late_pct"]].round(1)
 
 
-def hourly_on_time(interventions: pd.DataFrame, raw: dict) -> pd.DataFrame:
-    """When in the day: % on time by hour, split by the regime of the commune's first centre."""
+def late_by_time_of_day(interventions: pd.DataFrame, raw: dict) -> pd.DataFrame:
+    """When in the day: % late by time block, for communes first served by professional vs volunteer crews."""
     centres = raw["centres"].set_index("code_cis")
     first = raw["plan_deploiement"].query("rang == 1").set_index("insee")["code_cis"]
     judged = _judged(interventions)
-    hourly = (
-        judged.assign(hour=judged["alert_time"].dt.hour, regime=judged["insee"].map(first.map(centres["regime"])))
-        .groupby(["regime", "hour"])["late"].apply(lambda s: 100 * (1 - s.mean())).unstack(0)
+    blocks = pd.cut(judged["alert_time"].dt.hour, [-1, 6, 11, 18, 23], labels=list(TIME_BLOCKS))
+    late = (
+        judged.assign(block=blocks, regime=judged["insee"].map(first.map(centres["regime"])))
+        .pivot_table(index="block", columns="regime", values="late", aggfunc="mean", observed=True)
+        .mul(100)[["professionnel", "volontaire"]]
     )
 
-    fig, ax = plt.subplots(figsize=(8.6, 4.6))
-    for col, color, label in [("professionnel", BLUE, "Communes covered first by a professional centre"),
-                              ("volontaire", ORANGE, "Communes covered first by a volunteer centre")]:
-        ax.plot(hourly.index, hourly[col], color=color, lw=2, marker="o", ms=4, label=label)
-        ax.annotate(f"{hourly[col].min():.0f}% at worst", (hourly[col].idxmin(), hourly[col].min()),
-                    xytext=(0, -16), textcoords="offset points", ha="center", fontsize=8.5, color=INK)
-    ax.axvspan(11.5, 19.5, color=GRID, alpha=0.6, lw=0, zorder=0)
-    ax.text(15.5, 101, "daytime peak of calls", ha="center", fontsize=8.5, color=MUTED)
-    ax.set_xticks(range(0, 24, 2), [f"{hh}h" for hh in range(0, 24, 2)])
-    ax.set_ylim(50, 104)
-    ax.set_ylabel("% of interventions on time")
-    ax.set_xlabel("Hour of the alert")
-    ax.set_title("When (day): peak hours hurt, and volunteer-covered communes lag all day")
-    ax.legend(loc="center left", frameon=False, fontsize=9)
+    fig, ax = plt.subplots(figsize=(8.6, 4.8))
+    x = np.arange(len(late))
+    width = 0.36
+    for k, (col, color, label) in enumerate([
+        ("professionnel", BLUE, "Communes first served by professional crews"),
+        ("volontaire", ORANGE, "Communes first served by volunteer crews"),
+    ]):
+        bars = ax.bar(x + (k - 0.5) * width, late[col], width=width, color=color, edgecolor=SURFACE,
+                      linewidth=2, label=label)
+        ax.bar_label(bars, labels=[f"{v:.0f}%" for v in late[col]], padding=3, fontsize=9.5, color=INK)
+    ax.set_xticks(x, [f"{name}\n{hours}" for name, hours in TIME_BLOCKS.items()])
+    ax.tick_params(axis="x", length=0, labelsize=10, labelcolor=INK)
+    ax.set_ylim(0, 52)
+    ax.set_ylabel("% of interventions arriving late")
+    ax.grid(axis="x", visible=False)
+    ax.set_title("When in the day: afternoons are the hardest, and volunteer areas are late at every hour",
+                 loc="left", pad=22)
+    ax.text(0, 1.02, "Share of 2025 interventions arriving after the regulatory deadline",
+            transform=ax.transAxes, fontsize=9.5, color=MUTED)
+    ax.legend(loc="upper left", frameon=False, fontsize=9.5, bbox_to_anchor=(0, 0.98))
     fig.tight_layout()
-    fig.savefig(RESULTS / "hourly_on_time.png")
-    return pd.DataFrame({
-        "night 0h to 6h": hourly.loc[0:6].mean(),
-        "peak 12h to 19h": hourly.loc[12:19].mean(),
-        "worst hour": hourly.idxmin().astype(str) + "h",
-    }).round(1)
+    fig.savefig(RESULTS / "late_by_time_of_day.png")
+    late.columns = ["professional", "volunteer"]
+    return late.round(1).T
 
 
 def monthly_unfulfilled(interventions: pd.DataFrame) -> pd.DataFrame:
