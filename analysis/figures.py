@@ -3,7 +3,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.lines import Line2D
 
 from helpers import RESULTS
@@ -158,63 +157,88 @@ def monthly_unfulfilled(interventions: pd.DataFrame) -> pd.DataFrame:
 # -- Task 2 ---------------------------------------------------------------------------------------
 
 
-VEHICLES_RAMP = LinearSegmentedColormap.from_list("vehicles", ["#cde2fb", "#86b6ef", "#2a78d6", "#184f95", "#0d366b"])
-
-
-def reinforcement_curves(curve_v: pd.DataFrame, curve_f: pd.DataFrame) -> None:
-    """What each extra vehicle buys: P90 against VSAVs added, unanswered fires against FPTs added."""
-    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.6))
-    panels = [
-        (axes[0], curve_v, BLUE, "VSAV", "P90 of SAP response times (min)",
-         "VSAV: about half a minute off the P90 each, up to the 8th"),
-        (axes[1], curve_f, ORANGE, "FPT", "Unanswered fires per year",
-         "FPT: the first four remove 94% of unanswered fires"),
-    ]
-    for ax, curve, color, vehicle, ylabel, title in panels:
-        ax.errorbar(curve.index, curve["mean"], yerr=curve["hw"], color=color, lw=2, marker="o", ms=5,
-                    capsize=3, elinewidth=1.2)
-        ax.set_xticks(curve.index, [f"{k}\n{c}" if k else "0\nnone" for k, c in zip(curve.index, curve["centre"])],
-                      fontsize=7.5)
-        ax.set_xlabel(f"{vehicle}s added, and the centre that received the last one")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title, fontsize=10)
-    axes[1].set_ylim(bottom=0)
-    fig.text(0.01, 0.01, "Simulator, mean of 10 fresh replays per point (baseline: 50). Bars: 95% interval.",
-             fontsize=8, color=MUTED)
-    fig.tight_layout(rect=(0, 0.03, 1, 1))
-    fig.savefig(RESULTS / "reinforcement_curves.png")
+def vehicle_gains(curve_v: pd.DataFrame, curve_f: pd.DataFrame) -> None:
+    """What each extra vehicle buys: one bar per vehicle added, grey when the gain is within the noise."""
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.4))
+    panels = [(axes[0], curve_v, BLUE, "VSAV", "Minutes taken off the P90 of SAP response times", "{:.2f}",
+               f"Today {curve_v['mean'][0]:.1f} min  >  8 VSAV {curve_v['mean'][8]:.1f}  >  12 VSAV {curve_v['mean'][12]:.1f}"),
+              (axes[1], curve_f, ORANGE, "FPT", "Unanswered fires avoided per year", "{:.0f}",
+               f"Today {curve_f['mean'][0]:.0f} fires  >  4 FPT {curve_f['mean'][4]:.0f}  >  12 FPT {curve_f['mean'][12]:.0f}")]
+    for ax, curve, color, vehicle, ylabel, fmt, path in panels:
+        gain = -curve["mean"].diff().iloc[1:]
+        noise = np.sqrt(curve["hw"] ** 2 + curve["hw"].shift() ** 2).iloc[1:]
+        colors = [color if g > n else NO_TARGET for g, n in zip(gain, noise)]
+        ax.bar(gain.index, gain, color=colors, width=0.7)
+        for k, g in gain.items():
+            ax.text(k, max(g, 0) + gain.max() * 0.015, fmt.format(g), ha="center", fontsize=7.5, color=INK)
+        ax.set_xticks(gain.index, [f"{k}\n{c}" for k, c in zip(gain.index, curve["centre"].iloc[1:])], fontsize=7.5)
+        ax.set_xlabel(f"{vehicle} number, and the centre that receives it")
+        ax.set_ylabel(ylabel, fontsize=9)
+        ax.set_title(path, fontsize=9.5)
+        ax.grid(axis="x", visible=False)
+        ax.axhline(0, color=MUTED, lw=0.8)
+    fig.suptitle("What each extra vehicle buys (grey: too small to tell from the noise)",
+                 x=0.01, y=0.99, ha="left", fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.savefig(RESULTS / "vehicle_gains.png")
 
 
 def tradeoff_front(front: pd.DataFrame, picks: pd.DataFrame) -> None:
-    """The menu: every split of up to 12 vehicles, P90 against unanswered fires, coloured by vehicles bought."""
-    fig, ax = plt.subplots(figsize=(8.6, 6.2))
-    dominated = front[~front["pareto"]]
-    ax.scatter(dominated["p90"], dominated["inc"], s=22, color=NO_TARGET, zorder=2, label="Dominated (wasteful)")
-    for total in (3, 6, 9, 12):
+    """The menu: for a given number of vehicles, each split between VSAV and FPT lands on one line."""
+    fig, ax = plt.subplots(figsize=(8.6, 6))
+    ax.scatter(front["p90"], front["inc"], s=14, color=NO_TARGET, zorder=1, label="Any split of up to 12 vehicles")
+    for total, shade in [(2, "#86b6ef"), (4, "#2a78d6"), (8, "#184f95"), (12, "#0d366b")]:
         line = front[front["pareto"] & (front["vehicles"] == total)].sort_values("VSAV")
-        ax.plot(line["p90"], line["inc"], color=VEHICLES_RAMP(total / 12), lw=1.2, zorder=2,
-                label=f"All splits of {total} vehicles")
-    pts = front[front["pareto"]]
-    sc = ax.scatter(pts["p90"], pts["inc"], c=pts["vehicles"], cmap=VEHICLES_RAMP, vmin=0, vmax=12, s=34,
-                    edgecolor=SURFACE, linewidth=0.8, zorder=3)
+        ax.plot(line["p90"], line["inc"], color=shade, lw=1.8, marker="o", ms=3.5, zorder=2)
+        end = line.iloc[0]  # all-FPT end
+        ax.text(end["p90"] + 0.06, end["inc"], f"{total} vehicles", color=shade, fontsize=8.5, va="center")
+    today = front[front["vehicles"] == 0].iloc[0]
+    ax.scatter(today["p90"], today["inc"], marker="s", s=70, color=INK, zorder=3)
+    ax.annotate("Today", (today["p90"], today["inc"]), xytext=(-8, 0), textcoords="offset points", ha="right",
+                va="center", fontsize=9, fontweight="bold")
+    ax.scatter(picks["p90"], picks["inc"], marker="*", s=260, color=ORANGE, edgecolor=INK, linewidth=0.8, zorder=4)
     for _, p in picks.iterrows():
-        ax.scatter(p["p90"], p["inc"], s=190, facecolor="none", edgecolor=INK, linewidth=1.6, zorder=4)
-        ax.annotate(p["label"], (p["p90"], p["inc"]), xytext=(9, 4), textcoords="offset points", fontsize=9,
-                    color=INK, fontweight="bold", zorder=5)
-    cb = fig.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
-    cb.set_label("Extra vehicles bought", color=INK)
-    cb.outline.set_visible(False)
-    ax.set_xlabel("P90 of SAP response times (min)")
+        ax.annotate(p["label"], (p["p90"], p["inc"]), xytext=(-12, 6), textcoords="offset points", fontsize=10,
+                    fontweight="bold", color=INK, zorder=5)
     ax.set_yscale("symlog", linthresh=10, linscale=0.6)
     ticks = [0, 5, 10, 20, 50, 100, 200, 300]
     ax.set_yticks(ticks, [str(t) for t in ticks])
-    ax.set_ylim(-0.5, 330)
+    ax.set_ylim(-0.5, 340)
+    ax.set_xlim(front["p90"].min() - 0.15, front["p90"].max() + 0.75)
+    ax.set_xlabel("P90 of SAP response times (min)   <  better")
     ax.set_ylabel("Unanswered fires per year (scale stretched at the bottom)")
-    ax.set_title("The menu: along each line, the same number of vehicles split differently\n"
-                 "between VSAV (moves left) and FPT (moves down)", fontsize=10)
-    ax.legend(loc="upper left", bbox_to_anchor=(0.36, 0.92), frameon=False, fontsize=8.5)
+    ax.set_title("The menu: on each line the same money, split between VSAV (left) and FPT (down)\n"
+                 "Stars: the four recommended plans", fontsize=10)
+    ax.legend(loc="lower left", frameon=False, fontsize=8.5)
     fig.tight_layout()
     fig.savefig(RESULTS / "pareto_front.png")
+
+
+def plan_scorecard(picks: pd.DataFrame, today: dict) -> None:
+    """Each plan against today, one bar per objective."""
+    labels = ["Today"] + [f"{p.label}: {p.vehicles} vehicles" for p in picks.itertuples()]
+    p90 = [today["p90"]] + picks["p90"].tolist()
+    inc = [today["inc"]] + picks["inc"].tolist()
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.6), sharey=True)
+    for ax, values, color, title, fmt, change in [
+        (axes[0], p90, BLUE, "P90 of SAP response times (min)", "{:.1f} min",
+         lambda v: f"({v - p90[0]:+.1f})"),
+        (axes[1], inc, ORANGE, "Unanswered fires per year", "{:.0f}",
+         lambda v: f"({100 * (v - inc[0]) / inc[0]:+.0f}%)"),
+    ]:
+        y = np.arange(len(labels))[::-1]
+        ax.barh(y, values, color=[MUTED] + [color] * len(picks), height=0.6)
+        for i, (yi, v) in enumerate(zip(y, values)):
+            ax.text(v, yi, "  " + fmt.format(v) + ("  " + change(v) if i else ""), va="center", fontsize=9,
+                    color=INK)
+        ax.set_yticks(y, labels)
+        ax.set_title(title, fontsize=10)
+        ax.grid(axis="y", visible=False)
+        ax.set_xlim(0, max(values) * 1.4)
+    fig.suptitle("What each plan buys, against today (mean of 20 replays of the whole plan)", x=0.01, y=0.99,
+                 ha="left", fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(RESULTS / "plan_scorecard.png")
 
 
 def reinforcement_map(raw: dict, picks: pd.DataFrame, interventions: pd.DataFrame) -> None:

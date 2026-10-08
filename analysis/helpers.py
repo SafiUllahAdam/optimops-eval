@@ -142,3 +142,45 @@ def compare_to_baseline(kpis: dict[str, float], baseline: pd.DataFrame) -> pd.Da
     table["recomputed"] = pd.Series(kpis)
     table["gap"] = table["recomputed"] - table["official"]
     return table
+
+
+def shortage_by_centre(raw: dict[str, pd.DataFrame], interventions: pd.DataFrame) -> pd.DataFrame:
+    """Where 2025 says each vehicle type was short, per centre (used to pick the first simulator tests).
+
+    VSAV: SAP calls above the P90 in the centre's first-call communes, answered by another centre although
+          the centre usually gets there in time (its VSAV was busy).
+    FPT:  unanswered fires in communes where the centre is among the first three of the plan.
+    """
+    plan = raw["plan_deploiement"]
+    rank1 = plan[plan["rang"] == 1].set_index("insee")["code_cis"]
+    sap = interventions[interventions["reason"] == "SAP"].assign(r1=lambda d: d["insee"].map(rank1))
+    p90 = np.percentile(sap["delay_min"], 90)
+    own = sap[sap["first_centre"] == sap["r1"]].groupby("insee")["delay_min"].median()
+    busy = sap[(sap["first_centre"] != sap["r1"]) & (sap["delay_min"] > p90) & (sap["insee"].map(own) < p90)]
+    missed = interventions[(interventions["reason"] == "INC") & interventions["unfulfilled"]].groupby("insee").size()
+    near = plan[plan["rang"] <= 3].assign(missed=lambda d: d["insee"].map(missed))
+    return pd.DataFrame({
+        "VSAV": busy.groupby("r1").size(),
+        "FPT": near.groupby("code_cis")["missed"].sum(),
+    }).reindex(raw["centres"]["code_cis"]).fillna(0)
+
+
+def who_benefits(raw: dict[str, pd.DataFrame], interventions: pd.DataFrame, config: dict) -> dict:
+    """Communes where a reinforced centre is among the first three called, and their 2025 problems."""
+    plan = raw["plan_deploiement"]
+    zones = raw["communes"].set_index("insee")["zone_sdacr"]
+    missed = interventions[(interventions["reason"] == "INC") & interventions["unfulfilled"]].groupby("insee").size()
+    slow = interventions[(interventions["reason"] == "SAP") & (interventions["delay_min"] > 20)].groupby("insee").size()
+
+    def reached(vehicle):
+        cis = [c for c, k in config.items() if vehicle in k]
+        return plan[(plan["rang"] <= 3) & plan["code_cis"].isin(cis)]["insee"].unique()
+
+    fire, sap = reached("FPT"), reached("VSAV")
+    return {
+        "communes (fires)": len(fire),
+        "their 2025 unanswered fires": int(missed.reindex(fire).sum()),
+        "communes (SAP)": len(sap),
+        "their 2025 SAP calls > 20 min": int(slow.reindex(sap).sum()),
+        "zones": ", ".join(f"{z}: {n}" for z, n in zones[np.union1d(fire, sap)].value_counts().sort_index().items()),
+    }

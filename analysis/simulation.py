@@ -120,3 +120,63 @@ def pareto_mask(objectives) -> np.ndarray:
     obj = np.asarray(objectives, dtype=float)
     dominated = np.array([((obj <= row).all(axis=1) & (obj < row).any(axis=1)).any() for row in obj])
     return ~dominated
+
+
+def summary(runs: dict) -> pd.DataFrame:
+    """Mean ± 95% half-width of both objectives, one row per labelled run."""
+    return pd.DataFrame({
+        label: {
+            "vehicles": int(r["vehicles"]), "replays": int(r["n"]),
+            "P90 SAP (min)": f"{r['p90']:.2f} ± {half_width(r['p90_sd'], r['n']):.2f}",
+            "unanswered fires": f"{r['inc']:.0f} ± {half_width(r['inc_sd'], r['n']):.0f}",
+        } for label, r in runs.items()
+    }).T
+
+
+def _add(config: dict, cis: str, vehicle: str) -> dict:
+    return {**config, cis: {vehicle: config.get(cis, {}).get(vehicle, 0) + 1}}
+
+
+def greedy(vehicle: str, objective: str, first_gains: pd.Series, base: dict, reserve: int,
+           n: int = 3, short_list: int = 5) -> pd.DataFrame:
+    """Add one vehicle at a time where it helps most ("lazy greedy").
+
+    Each step re-tests only the `short_list` centres with the best last-known gain: with diminishing returns a
+    centre's gain only shrinks as vehicles are added, so the others cannot have overtaken.
+    """
+    gains, config, current, path = first_gains.copy(), {}, base[objective], []
+    while vehicles(config) < MAX_VEHICLES:
+        trials = {}
+        for c in gains.nlargest(short_list).index:
+            trials[c] = evaluate(_add(config, c, vehicle), n, tag="C_greedy", reserve=reserve)[objective]
+            gains[c] = current - trials[c]
+        best = min(trials, key=trials.get)
+        config, current = _add(config, best, vehicle), trials[best]
+        path.append({"added": vehicles(config), "centre": best, "greedy said": current, "config": config})
+    return pd.DataFrame(path).set_index("added")
+
+
+def confirm(path: pd.DataFrame, objective: str, base: dict, reserve: int, n: int = 10) -> pd.DataFrame:
+    """Replay each greedy step with fresh replays: the greedy's own numbers are flattered (winner's curse)."""
+    rows = [base] + [evaluate(cfg, n, tag="D_confirm", reserve=reserve) for cfg in path["config"]]
+    return pd.DataFrame({
+        "centre": ["(none)"] + path["centre"].tolist(),
+        "mean": [r[objective] for r in rows],
+        "hw": [float(half_width(r[f"{objective}_sd"], r["n"])) for r in rows],
+        "greedy said": [base[objective]] + path["greedy said"].tolist(),
+    }).rename_axis("added")
+
+
+def combine(vsav_path: pd.DataFrame, fpt_path: pd.DataFrame, v: int, f: int) -> dict:
+    """The first v VSAV and the first f FPT of the two greedy sequences, as one reinforcement."""
+    config = {}
+    for path, k in ((vsav_path, v), (fpt_path, f)):
+        for cis, per_type in (path.loc[k, "config"] if k else {}).items():
+            config.setdefault(cis, {}).update(per_type)
+    return config
+
+
+def describe(config: dict) -> str:
+    return "; ".join(
+        f"{t}: " + ", ".join(c + (f" x{k[t]}" if k[t] > 1 else "") for c, k in sorted(config.items()) if t in k)
+        for t in ("FPT", "VSAV") if any(t in k for k in config.values()))
