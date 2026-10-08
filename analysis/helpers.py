@@ -93,6 +93,49 @@ def compute_kpis(interventions: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def first_centre_table(raw: dict[str, pd.DataFrame], interventions: pd.DataFrame) -> pd.DataFrame:
+    """Commune -> first-response centre (official plan), with the checks made on the data.
+
+    - first_centre      : plan rang 1 (every centre holds a VSAV, so it answers SAP / AVP first);
+    - first_centre_fire : first centre of the plan order that holds an FPT (14 centres have none);
+    - nearest_centre    : straight-line nearest centre, the naive alternative rule;
+    - observed_*        : centre most often arriving first in the data, per vehicle type;
+    - plan_share_*_pct  : share of interventions where the plan's centre did arrive first.
+    """
+    plan = raw["plan_deploiement"].sort_values(["insee", "rang"])
+    centres = raw["centres"].set_index("code_cis")
+    communes = raw["communes"].set_index("insee")
+
+    first_centre = plan[plan["rang"] == 1].set_index("insee")["code_cis"]
+    holds_fpt = plan["code_cis"].map(centres["nb_fpt"]) > 0
+    first_fire = plan[holds_fpt].drop_duplicates("insee").set_index("insee")["code_cis"]
+
+    dist = np.hypot(
+        communes["x_km"].to_numpy()[:, None] - centres["x_km"].to_numpy()[None, :],
+        communes["y_km"].to_numpy()[:, None] - centres["y_km"].to_numpy()[None, :],
+    )
+    nearest = pd.Series(centres.index[dist.argmin(axis=1)], index=communes.index)
+
+    arrived = interventions.dropna(subset=["first_centre"])
+    table = pd.DataFrame(
+        {
+            "commune": communes["nom_commune"],
+            "zone": communes["zone_sdacr"],
+            "first_centre": first_centre,
+            "first_centre_fire": first_fire,
+            "nearest_centre": nearest,
+        }
+    )
+    for vehicle, plan_col in [("VSAV", "first_centre"), ("FPT", "first_centre_fire")]:
+        sub = arrived[arrived["first_vehicle"] == vehicle]
+        expected = sub["insee"].map(table[plan_col])
+        table[f"observed_{vehicle.lower()}"] = sub.groupby("insee")["first_centre"].agg(lambda s: s.value_counts().idxmax())
+        table[f"plan_share_{vehicle.lower()}_pct"] = (
+            (sub["first_centre"] == expected).groupby(sub["insee"]).mean().mul(100).round(1)
+        )
+    return table.rename_axis("insee").reset_index()
+
+
 def compare_to_baseline(kpis: dict[str, float], baseline: pd.DataFrame) -> pd.DataFrame:
     """Side-by-side table: official value, recomputed value, gap."""
     table = baseline.rename(columns={"indicateur": "indicator", "valeur": "official"}).set_index("indicator")
