@@ -275,3 +275,47 @@ def reinforcement_map(raw: dict, picks: pd.DataFrame, interventions: pd.DataFram
                  x=0.01, ha="left", fontsize=11, fontweight="bold")
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     fig.savefig(RESULTS / "reinforcement_map.png")
+
+
+# -- Task 3 ---------------------------------------------------------------------------------------
+
+
+def audit_comparison(n1: pd.DataFrame, n5: pd.DataFrame, original_front, pick: int,
+                     task2_front: pd.DataFrame, task2_picks: pd.DataFrame) -> None:
+    """Left: how far one replay is from five. Right: the audit's pick against the corrected search (Task 2)."""
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.9))
+    ax = axes[0]
+    for i in n1.index:
+        ax.plot([n1.loc[i, "p90"], n5.loc[i, "p90"]], [n1.loc[i, "inc"], n5.loc[i, "inc"]], color=NO_TARGET,
+                lw=1, zorder=1)
+    ax.scatter(n1["p90"], n1["inc"], s=18, facecolor=SURFACE, edgecolor=MUTED, zorder=2, label="1 replay (audit)")
+    ax.scatter(n5["p90"], n5["inc"], s=18, color=INK, zorder=3, label="5 replays")
+    ax.set_title("One replay is not enough: each line is one plan moving\nfrom 1 replay to the mean of 5",
+                 fontsize=10)
+    ax.legend(loc="upper right", frameon=False, fontsize=8.5)
+
+    ax = axes[1]
+    ax.scatter(n5["p90"], n5["inc"], s=18, color=NO_TARGET, zorder=1, label="Audit's 40 random plans")
+    ax.scatter(n5.loc[original_front, "p90"], n5.loc[original_front, "inc"], s=60, facecolor="none",
+               edgecolor=ORANGE, linewidth=1.4, zorder=2, label="Audit's front (more vehicles counted as better)")
+    line = task2_front[task2_front["pareto"] & (task2_front["vehicles"] == 12)].sort_values("VSAV")
+    ax.plot(line["p90"], line["inc"], color=BLUE, lw=1.8, zorder=2, label="Task 2: every split of 12 vehicles")
+    ax.scatter(task2_picks["p90"], task2_picks["inc"], marker="*", s=200, color=BLUE, edgecolor=INK, zorder=4)
+    for _, p in task2_picks.iterrows():
+        ax.annotate(p["label"], (p["p90"], p["inc"]), xytext=(-12, 6), textcoords="offset points",
+                    fontsize=9.5, fontweight="bold")
+    ax.scatter(n5.loc[pick, "p90"], n5.loc[pick, "inc"], marker="*", s=260, color=ORANGE, edgecolor=INK, zorder=5)
+    ax.annotate(f"Audit's pick: {n5.loc[pick, 'cost']} vehicles", (n5.loc[pick, "p90"], n5.loc[pick, "inc"]),
+                xytext=(10, 8), textcoords="offset points", fontsize=9, fontweight="bold", color=INK)
+    ax.set_yscale("symlog", linthresh=10, linscale=0.6)
+    ticks = [0, 10, 20, 50, 100, 200, 300]
+    ax.set_yticks(ticks, [str(t) for t in ticks])
+    ax.set_ylim(-0.5, 340)
+    ax.set_title("The audit's pick against the Task 2 search\n(stars A to D: Task 2 plans, 2 to 12 vehicles)",
+                 fontsize=10)
+    ax.legend(loc="lower left", frameon=False, fontsize=8)
+    for ax in axes:
+        ax.set_xlabel("P90 of SAP response times (min)")
+        ax.set_ylabel("Unanswered fires per year")
+    fig.tight_layout()
+    fig.savefig(RESULTS / "audit_comparison.png")

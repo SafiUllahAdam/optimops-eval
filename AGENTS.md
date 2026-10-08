@@ -48,7 +48,7 @@ small function, no single giant file. Notebooks: `task1_baseline.ipynb`, then `t
 - Never delete or edit `.budget.json` or `journal_simulateur.csv`. The journal is a deliverable, sent as is.
 - Call the simulator only through `simulation.evaluate()`. It caches every answer in `results/simulation_runs.csv`,
   so notebooks re-run for free. Never delete that file: re-running would spend the budget again.
-- Keep 600 replays for Act 3 (`reserve=` argument). After Task 2: 950 used, 1050 left.
+- Budget state: Task 2 used 950, Task 3 used 245 (5 of them charged by an interrupted run, not in the journal). 805 left.
 - Do not modify the simulator. Results are noisy: report means with their spread, never a single replay.
 
 ## Working rules
